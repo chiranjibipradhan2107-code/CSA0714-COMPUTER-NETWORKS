@@ -1,0 +1,2326 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+import random
+import math
+import time
+from collections import defaultdict, deque
+
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+
+# ============================================================
+# SMART HEALTHCARE NETWORK SIMULATOR
+# CSA0714 - COMPUTER NETWORKS
+# ============================================================
+
+random.seed(42)
+
+# ------------------------------------------------------------
+# HOSPITAL CONFIGURATION
+# ------------------------------------------------------------
+
+ZONES = {
+    "ICU": "10.1.0",
+    "Medical Records": "10.2.0",
+    "Laboratory": "10.3.0",
+    "Pharmacy / Emergency": "10.4.0"
+}
+
+ZONE_COLORS = {
+    "ICU": "#e74c3c",
+    "Medical Records": "#3498db",
+    "Laboratory": "#2ecc71",
+    "Pharmacy / Emergency": "#f39c12"
+}
+
+DEVICE_TYPES = [
+    "Patient Monitor",
+    "Workstation",
+    "Medical Server",
+    "Lab System",
+    "Pharmacy System",
+    "Emergency Terminal",
+    "Doctor Terminal",
+    "Nurse Station",
+    "Database Client",
+    "IoT Device"
+]
+
+PROTOCOLS = {
+    "TCP": {
+        "packet_size": 1500,
+        "reliability": 0.995,
+        "delay": 1.15
+    },
+    "UDP": {
+        "packet_size": 512,
+        "reliability": 0.970,
+        "delay": 0.85
+    },
+    "HTTP": {
+        "packet_size": 1200,
+        "reliability": 0.990,
+        "delay": 1.10
+    },
+    "DNS": {
+        "packet_size": 256,
+        "reliability": 0.995,
+        "delay": 0.80
+    },
+    "FTP": {
+        "packet_size": 1500,
+        "reliability": 0.985,
+        "delay": 1.20
+    },
+    "ICMP": {
+        "packet_size": 64,
+        "reliability": 0.995,
+        "delay": 0.75
+    }
+}
+
+SCENARIOS = {
+    "Normal Operation": {
+        "load": 1.0,
+        "congestion": 0.05,
+        "failure": 0.00
+    },
+    "Peak Patient Monitoring": {
+        "load": 2.5,
+        "congestion": 0.25,
+        "failure": 0.00
+    },
+    "Network Disruption": {
+        "load": 3.0,
+        "congestion": 0.35,
+        "failure": 0.12
+    }
+}
+
+TOPOLOGIES = [
+    "Star",
+    "Bus",
+    "Mesh",
+    "Hybrid"
+]
+
+
+# ============================================================
+# DEVICE MODEL
+# ============================================================
+
+class Device:
+
+    def __init__(self, device_id, zone, ip, device_type):
+
+        self.device_id = device_id
+        self.zone = zone
+        self.ip = ip
+        self.device_type = device_type
+
+
+def create_devices():
+
+    devices = []
+
+    count = 1
+
+    for zone_name, network in ZONES.items():
+
+        for i in range(10):
+
+            device = Device(
+                f"D{count:02d}",
+                zone_name,
+                f"{network}.{i + 10}",
+                DEVICE_TYPES[i]
+            )
+
+            devices.append(device)
+
+            count += 1
+
+    return devices
+
+
+# ============================================================
+# NETWORK TOPOLOGY
+# ============================================================
+
+class NetworkTopology:
+
+    def __init__(self, topology):
+
+        self.topology = topology
+
+        self.nodes = set()
+
+        self.edges = []
+
+        self.adjacency = defaultdict(set)
+
+        self.build()
+
+
+    def add_edge(self, a, b):
+
+        if a == b:
+            return
+
+        if (a, b) not in self.edges and (b, a) not in self.edges:
+
+            self.edges.append((a, b))
+
+            self.nodes.add(a)
+            self.nodes.add(b)
+
+            self.adjacency[a].add(b)
+            self.adjacency[b].add(a)
+
+
+    def build(self):
+
+        zones = [
+            "ICU",
+            "Medical Records",
+            "Laboratory",
+            "Pharmacy / Emergency"
+        ]
+
+        if self.topology == "Star":
+
+            self.nodes.add("CORE")
+
+            for zone in zones:
+                self.add_edge("CORE", zone)
+
+
+        elif self.topology == "Bus":
+
+            bus = [
+                "BUS1",
+                "BUS2",
+                "BUS3",
+                "BUS4",
+                "BUS5"
+            ]
+
+            for i in range(len(bus) - 1):
+                self.add_edge(
+                    bus[i],
+                    bus[i + 1]
+                )
+
+            self.add_edge("BUS2", "ICU")
+            self.add_edge("BUS3", "Medical Records")
+            self.add_edge("BUS4", "Laboratory")
+            self.add_edge("BUS5", "Pharmacy / Emergency")
+
+
+        elif self.topology == "Mesh":
+
+            for zone in zones:
+                self.nodes.add(zone)
+
+            for i in range(len(zones)):
+
+                for j in range(i + 1, len(zones)):
+
+                    self.add_edge(
+                        zones[i],
+                        zones[j]
+                    )
+
+
+        elif self.topology == "Hybrid":
+
+            self.nodes.add("CORE")
+
+            for zone in zones:
+                self.add_edge(
+                    "CORE",
+                    zone
+                )
+
+            self.add_edge(
+                "ICU",
+                "Laboratory"
+            )
+
+            self.add_edge(
+                "ICU",
+                "Pharmacy / Emergency"
+            )
+
+            self.add_edge(
+                "Laboratory",
+                "Pharmacy / Emergency"
+            )
+
+
+    def shortest_path(
+        self,
+        source,
+        destination,
+        failed_edges=None
+    ):
+
+        if source == destination:
+            return [source]
+
+        failed_edges = failed_edges or set()
+
+        queue = deque([source])
+
+        parent = {
+            source: None
+        }
+
+        while queue:
+
+            current = queue.popleft()
+
+            for neighbor in self.adjacency[current]:
+
+                edge = tuple(
+                    sorted(
+                        [current, neighbor]
+                    )
+                )
+
+                if edge in failed_edges:
+                    continue
+
+                if neighbor in parent:
+                    continue
+
+                parent[neighbor] = current
+
+                if neighbor == destination:
+
+                    path = []
+
+                    node = destination
+
+                    while node is not None:
+
+                        path.append(node)
+
+                        node = parent[node]
+
+                    return path[::-1]
+
+                queue.append(neighbor)
+
+        return None
+
+
+# ============================================================
+# SIMULATION ENGINE
+# ============================================================
+
+class SimulationEngine:
+
+    def __init__(self):
+
+        self.devices = create_devices()
+
+
+    def gateway(self, device):
+
+        return device.zone
+
+
+    def failed_edges(self, topology, scenario):
+
+        if scenario != "Network Disruption":
+            return set()
+
+        if topology == "Star":
+
+            return {
+                tuple(
+                    sorted(
+                        ["CORE", "ICU"]
+                    )
+                )
+            }
+
+        if topology == "Bus":
+
+            return {
+                tuple(
+                    sorted(
+                        ["BUS2", "BUS3"]
+                    )
+                )
+            }
+
+        if topology == "Mesh":
+
+            return {
+                tuple(
+                    sorted(
+                        ["ICU", "Laboratory"]
+                    )
+                )
+            }
+
+        if topology == "Hybrid":
+
+            return {
+                tuple(
+                    sorted(
+                        ["CORE", "ICU"]
+                    )
+                )
+            }
+
+        return set()
+
+
+    def simulate(
+        self,
+        topology_name,
+        protocol_name,
+        scenario_name,
+        packets=100
+    ):
+
+        topology = NetworkTopology(
+            topology_name
+        )
+
+        protocol = PROTOCOLS[
+            protocol_name
+        ]
+
+        scenario = SCENARIOS[
+            scenario_name
+        ]
+
+        failed = self.failed_edges(
+            topology_name,
+            scenario_name
+        )
+
+        delays = []
+
+        utilization_values = []
+
+        throughput_values = []
+
+        sent = 0
+
+        received = 0
+
+        source = random.choice(
+            self.devices
+        )
+
+        destination = random.choice(
+            self.devices
+        )
+
+        while destination.device_id == source.device_id:
+
+            destination = random.choice(
+                self.devices
+            )
+
+        source_gateway = self.gateway(
+            source
+        )
+
+        destination_gateway = self.gateway(
+            destination
+        )
+
+        path = topology.shortest_path(
+            source_gateway,
+            destination_gateway,
+            failed
+        )
+
+        for _ in range(packets):
+
+            sent += 1
+
+            if path is None:
+
+                continue
+
+            hops = len(path) + 2
+
+            utilization = min(
+                100,
+                protocol["packet_size"]
+                / 1000
+                * scenario["load"]
+                * random.uniform(
+                    1.0,
+                    2.0
+                )
+            )
+
+            base_delay = {
+                "Star": 2.0,
+                "Bus": 3.0,
+                "Mesh": 1.5,
+                "Hybrid": 1.8
+            }[topology_name]
+
+            delay = (
+                base_delay
+                * hops
+                * protocol["delay"]
+            )
+
+            delay += random.uniform(
+                0.5,
+                2.5
+            )
+
+            delay += (
+                scenario["congestion"]
+                * utilization
+                * 0.12
+            )
+
+            # Network resilience
+            failure = scenario["failure"]
+
+            if scenario_name == "Network Disruption":
+
+                if topology_name == "Mesh":
+                    failure *= 0.25
+
+                elif topology_name == "Hybrid":
+                    failure *= 0.45
+
+                elif topology_name == "Star":
+                    failure *= 1.10
+
+                elif topology_name == "Bus":
+                    failure *= 1.40
+
+            loss_probability = (
+                1
+                - protocol["reliability"]
+            )
+
+            loss_probability += (
+                scenario["congestion"]
+                * 0.08
+            )
+
+            loss_probability += failure
+
+            loss_probability = min(
+                0.95,
+                loss_probability
+            )
+
+            delivered = (
+                random.random()
+                > loss_probability
+            )
+
+            delays.append(
+                delay
+            )
+
+            utilization_values.append(
+                utilization
+            )
+
+            if delivered:
+
+                received += 1
+
+                throughput = (
+                    protocol["packet_size"]
+                    * 8
+                    / (delay / 1000)
+                    / 1000000
+                )
+
+                throughput_values.append(
+                    min(
+                        100,
+                        throughput
+                    )
+                )
+
+        if sent == 0:
+            sent = 1
+
+        delivery_ratio = (
+            received
+            / sent
+            * 100
+        )
+
+        loss = (
+            100
+            - delivery_ratio
+        )
+
+        avg_delay = (
+            sum(delays)
+            / len(delays)
+            if delays else 0
+        )
+
+        avg_utilization = (
+            sum(
+                utilization_values
+            )
+            / len(
+                utilization_values
+            )
+            if utilization_values
+            else 0
+        )
+
+        avg_throughput = (
+            sum(
+                throughput_values
+            )
+            / len(
+                throughput_values
+            )
+            if throughput_values
+            else 0
+        )
+
+        if len(delays) > 1:
+
+            jitter_values = []
+
+            for i in range(
+                1,
+                len(delays)
+            ):
+
+                jitter_values.append(
+                    abs(
+                        delays[i]
+                        - delays[i - 1]
+                    )
+                )
+
+            jitter = (
+                sum(jitter_values)
+                / len(jitter_values)
+            )
+
+        else:
+
+            jitter = 0
+
+        response_time = (
+            avg_delay * 2
+        )
+
+        return {
+            "Topology": topology_name,
+            "Protocol": protocol_name,
+            "Scenario": scenario_name,
+            "Sent": sent,
+            "Received": received,
+            "Delivery": delivery_ratio,
+            "Loss": loss,
+            "Delay": avg_delay,
+            "Response": response_time,
+            "Jitter": jitter,
+            "Throughput": avg_throughput,
+            "Utilization": avg_utilization,
+            "Path": path
+        }
+
+
+# ============================================================
+# MAIN APPLICATION
+# ============================================================
+
+class HealthcareNetworkApp:
+
+    def __init__(self, root):
+
+        self.root = root
+
+        self.root.title(
+            "Smart Healthcare Network Simulator"
+        )
+
+        self.root.geometry(
+            "1400x850"
+        )
+
+        self.root.minsize(
+            1100,
+            700
+        )
+
+        self.engine = SimulationEngine()
+
+        self.current_result = None
+
+        self.all_results = []
+
+        self.packet_animation = None
+
+        self.setup_style()
+
+        self.create_interface()
+
+        self.draw_network()
+
+
+    # --------------------------------------------------------
+    # STYLE
+    # --------------------------------------------------------
+
+    def setup_style(self):
+
+        style = ttk.Style()
+
+        try:
+            style.theme_use(
+                "clam"
+            )
+        except:
+            pass
+
+        style.configure(
+            "Title.TLabel",
+            font=(
+                "Arial",
+                22,
+                "bold"
+            )
+        )
+
+        style.configure(
+            "Heading.TLabel",
+            font=(
+                "Arial",
+                13,
+                "bold"
+            )
+        )
+
+        style.configure(
+            "Metric.TLabel",
+            font=(
+                "Arial",
+                16,
+                "bold"
+            )
+        )
+
+
+    # --------------------------------------------------------
+    # INTERFACE
+    # --------------------------------------------------------
+
+    def create_interface(self):
+
+        # Header
+        header = ttk.Frame(
+            self.root
+        )
+
+        header.pack(
+            fill="x",
+            padx=15,
+            pady=10
+        )
+
+        ttk.Label(
+            header,
+            text="SMART HEALTHCARE NETWORK SIMULATOR",
+            style="Title.TLabel"
+        ).pack(
+            side="left"
+        )
+
+        ttk.Label(
+            header,
+            text="CSA0714 | Computer Networks",
+            font=(
+                "Arial",
+                11
+            )
+        ).pack(
+            side="right"
+        )
+
+
+        # Controls
+        control_frame = ttk.LabelFrame(
+            self.root,
+            text="Simulation Configuration"
+        )
+
+        control_frame.pack(
+            fill="x",
+            padx=15,
+            pady=5
+        )
+
+        ttk.Label(
+            control_frame,
+            text="Topology:"
+        ).grid(
+            row=0,
+            column=0,
+            padx=8,
+            pady=8
+        )
+
+        self.topology_var = tk.StringVar(
+            value="Hybrid"
+        )
+
+        self.topology_combo = ttk.Combobox(
+            control_frame,
+            textvariable=self.topology_var,
+            values=TOPOLOGIES,
+            state="readonly",
+            width=18
+        )
+
+        self.topology_combo.grid(
+            row=0,
+            column=1,
+            padx=8
+        )
+
+        self.topology_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self.draw_network()
+        )
+
+
+        ttk.Label(
+            control_frame,
+            text="Protocol:"
+        ).grid(
+            row=0,
+            column=2,
+            padx=8
+        )
+
+        self.protocol_var = tk.StringVar(
+            value="UDP"
+        )
+
+        ttk.Combobox(
+            control_frame,
+            textvariable=self.protocol_var,
+            values=list(
+                PROTOCOLS.keys()
+            ),
+            state="readonly",
+            width=18
+        ).grid(
+            row=0,
+            column=3,
+            padx=8
+        )
+
+
+        ttk.Label(
+            control_frame,
+            text="Scenario:"
+        ).grid(
+            row=0,
+            column=4,
+            padx=8
+        )
+
+        self.scenario_var = tk.StringVar(
+            value="Normal Operation"
+        )
+
+        ttk.Combobox(
+            control_frame,
+            textvariable=self.scenario_var,
+            values=list(
+                SCENARIOS.keys()
+            ),
+            state="readonly",
+            width=25
+        ).grid(
+            row=0,
+            column=5,
+            padx=8
+        )
+
+
+        ttk.Label(
+            control_frame,
+            text="Packets:"
+        ).grid(
+            row=0,
+            column=6,
+            padx=8
+        )
+
+        self.packet_var = tk.StringVar(
+            value="100"
+        )
+
+        ttk.Entry(
+            control_frame,
+            textvariable=self.packet_var,
+            width=10
+        ).grid(
+            row=0,
+            column=7,
+            padx=8
+        )
+
+
+        ttk.Button(
+            control_frame,
+            text="RUN SIMULATION",
+            command=self.run_simulation
+        ).grid(
+            row=0,
+            column=8,
+            padx=10
+        )
+
+
+        ttk.Button(
+            control_frame,
+            text="COMPARE TOPOLOGIES",
+            command=self.compare_topologies
+        ).grid(
+            row=0,
+            column=9,
+            padx=10
+        )
+
+
+        ttk.Button(
+            control_frame,
+            text="CLEAR",
+            command=self.clear_results
+        ).grid(
+            row=0,
+            column=10,
+            padx=10
+        )
+
+
+        # Main content
+        main = ttk.Frame(
+            self.root
+        )
+
+        main.pack(
+            fill="both",
+            expand=True,
+            padx=15,
+            pady=5
+        )
+
+
+        # Left network panel
+        network_frame = ttk.LabelFrame(
+            main,
+            text="Hospital Network Topology"
+        )
+
+        network_frame.pack(
+            side="left",
+            fill="both",
+            expand=True,
+            padx=(0, 5)
+        )
+
+        self.canvas = tk.Canvas(
+            network_frame,
+            background="#f8f9fa",
+            highlightthickness=0
+        )
+
+        self.canvas.pack(
+            fill="both",
+            expand=True,
+            padx=5,
+            pady=5
+        )
+
+
+        # Right panel
+        right = ttk.Frame(
+            main,
+            width=450
+        )
+
+        right.pack(
+            side="right",
+            fill="y",
+            padx=(5, 0)
+        )
+
+        right.pack_propagate(
+            False
+        )
+
+
+        # Network information
+        info_frame = ttk.LabelFrame(
+            right,
+            text="Network Information"
+        )
+
+        info_frame.pack(
+            fill="x",
+            pady=5
+        )
+
+        info_text = (
+            "Hospital Zones: 4\n"
+            "End Devices: 40\n"
+            "ICU: 10 devices\n"
+            "Medical Records: 10 devices\n"
+            "Laboratory: 10 devices\n"
+            "Pharmacy / Emergency: 10 devices"
+        )
+
+        ttk.Label(
+            info_frame,
+            text=info_text,
+            justify="left"
+        ).pack(
+            anchor="w",
+            padx=10,
+            pady=8
+        )
+
+
+        # Metrics
+        metrics_frame = ttk.LabelFrame(
+            right,
+            text="Performance Metrics"
+        )
+
+        metrics_frame.pack(
+            fill="x",
+            pady=5
+        )
+
+        self.metric_vars = {}
+
+        metric_names = [
+            "Delivery Ratio",
+            "Packet Loss",
+            "End-to-End Delay",
+            "Response Time",
+            "Jitter",
+            "Throughput",
+            "Bandwidth Utilization"
+        ]
+
+        for i, metric in enumerate(
+            metric_names
+        ):
+
+            ttk.Label(
+                metrics_frame,
+                text=metric + ":"
+            ).grid(
+                row=i,
+                column=0,
+                sticky="w",
+                padx=8,
+                pady=3
+            )
+
+            var = tk.StringVar(
+                value="-"
+            )
+
+            self.metric_vars[
+                metric
+            ] = var
+
+            ttk.Label(
+                metrics_frame,
+                textvariable=var,
+                style="Metric.TLabel"
+            ).grid(
+                row=i,
+                column=1,
+                sticky="e",
+                padx=8,
+                pady=3
+            )
+
+
+        # Status
+        status_frame = ttk.LabelFrame(
+            right,
+            text="Simulation Status"
+        )
+
+        status_frame.pack(
+            fill="x",
+            pady=5
+        )
+
+        self.status_var = tk.StringVar(
+            value="Ready"
+        )
+
+        ttk.Label(
+            status_frame,
+            textvariable=self.status_var,
+            wraplength=400
+        ).pack(
+            anchor="w",
+            padx=10,
+            pady=10
+        )
+
+
+        # Packet log
+        log_frame = ttk.LabelFrame(
+            right,
+            text="Packet / Event Log"
+        )
+
+        log_frame.pack(
+            fill="both",
+            expand=True,
+            pady=5
+        )
+
+        self.log = tk.Text(
+            log_frame,
+            height=10,
+            width=50,
+            font=(
+                "Courier New",
+                9
+            )
+        )
+
+        self.log.pack(
+            fill="both",
+            expand=True,
+            padx=5,
+            pady=5
+        )
+
+
+        # Bottom
+        bottom = ttk.Frame(
+            self.root
+        )
+
+        bottom.pack(
+            fill="x",
+            padx=15,
+            pady=8
+        )
+
+        self.progress = ttk.Progressbar(
+            bottom,
+            mode="determinate"
+        )
+
+        self.progress.pack(
+            fill="x",
+            side="left",
+            expand=True,
+            padx=(0, 10)
+        )
+
+        self.devices_var = tk.StringVar(
+            value="40 End Devices | 4 Zones"
+        )
+
+        ttk.Label(
+            bottom,
+            textvariable=self.devices_var
+        ).pack(
+            side="right"
+        )
+
+
+    # --------------------------------------------------------
+    # DRAW NETWORK
+    # --------------------------------------------------------
+
+    def draw_network(self):
+
+        self.canvas.delete(
+            "all"
+        )
+
+        topology_name = (
+            self.topology_var.get()
+        )
+
+        topology = NetworkTopology(
+            topology_name
+        )
+
+        width = max(
+            self.canvas.winfo_width(),
+            700
+        )
+
+        height = max(
+            self.canvas.winfo_height(),
+            500
+        )
+
+        center_x = width / 2
+
+        center_y = height / 2
+
+        positions = {}
+
+        # ----------------------------------------------------
+        # Infrastructure positions
+        # ----------------------------------------------------
+
+        if topology_name == "Star":
+
+            positions["CORE"] = (
+                center_x,
+                center_y
+            )
+
+            positions["ICU"] = (
+                center_x - 230,
+                center_y - 130
+            )
+
+            positions["Medical Records"] = (
+                center_x + 230,
+                center_y - 130
+            )
+
+            positions["Laboratory"] = (
+                center_x - 230,
+                center_y + 130
+            )
+
+            positions["Pharmacy / Emergency"] = (
+                center_x + 230,
+                center_y + 130
+            )
+
+
+        elif topology_name == "Mesh":
+
+            positions["ICU"] = (
+                center_x - 220,
+                center_y - 150
+            )
+
+            positions["Medical Records"] = (
+                center_x + 220,
+                center_y - 150
+            )
+
+            positions["Laboratory"] = (
+                center_x - 220,
+                center_y + 150
+            )
+
+            positions["Pharmacy / Emergency"] = (
+                center_x + 220,
+                center_y + 150
+            )
+
+
+        elif topology_name == "Hybrid":
+
+            positions["CORE"] = (
+                center_x,
+                center_y
+            )
+
+            positions["ICU"] = (
+                center_x - 230,
+                center_y - 130
+            )
+
+            positions["Medical Records"] = (
+                center_x + 230,
+                center_y - 130
+            )
+
+            positions["Laboratory"] = (
+                center_x - 230,
+                center_y + 130
+            )
+
+            positions["Pharmacy / Emergency"] = (
+                center_x + 230,
+                center_y + 130
+            )
+
+
+        elif topology_name == "Bus":
+
+            bus_y = center_y
+
+            positions["BUS1"] = (
+                center_x - 280,
+                bus_y
+            )
+
+            positions["BUS2"] = (
+                center_x - 140,
+                bus_y
+            )
+
+            positions["BUS3"] = (
+                center_x,
+                bus_y
+            )
+
+            positions["BUS4"] = (
+                center_x + 140,
+                bus_y
+            )
+
+            positions["BUS5"] = (
+                center_x + 280,
+                bus_y
+            )
+
+            positions["ICU"] = (
+                center_x - 140,
+                center_y - 150
+            )
+
+            positions["Medical Records"] = (
+                center_x,
+                center_y - 150
+            )
+
+            positions["Laboratory"] = (
+                center_x + 140,
+                center_y + 150
+            )
+
+            positions["Pharmacy / Emergency"] = (
+                center_x + 280,
+                center_y + 150
+            )
+
+
+        # ----------------------------------------------------
+        # Draw links
+        # ----------------------------------------------------
+
+        for a, b in topology.edges:
+
+            if a not in positions or b not in positions:
+                continue
+
+            x1, y1 = positions[a]
+
+            x2, y2 = positions[b]
+
+            self.canvas.create_line(
+                x1,
+                y1,
+                x2,
+                y2,
+                fill="#7f8c8d",
+                width=3
+            )
+
+
+        # ----------------------------------------------------
+        # Draw infrastructure nodes
+        # ----------------------------------------------------
+
+        for node, (x, y) in positions.items():
+
+            if node.startswith("BUS"):
+
+                color = "#95a5a6"
+
+                label = node
+
+            elif node == "CORE":
+
+                color = "#8e44ad"
+
+                label = "CORE"
+
+            else:
+
+                color = ZONE_COLORS.get(
+                    node,
+                    "#34495e"
+                )
+
+                label = node
+
+            radius = 38
+
+            self.canvas.create_oval(
+                x - radius,
+                y - radius,
+                x + radius,
+                y + radius,
+                fill=color,
+                outline="white",
+                width=3
+            )
+
+            self.canvas.create_text(
+                x,
+                y,
+                text=label,
+                fill="white",
+                font=(
+                    "Arial",
+                    9,
+                    "bold"
+                ),
+                width=75
+            )
+
+
+        # ----------------------------------------------------
+        # Draw device indicators
+        # ----------------------------------------------------
+
+        if topology_name != "Bus":
+
+            for zone in ZONES:
+
+                if zone not in positions:
+                    continue
+
+                zx, zy = positions[zone]
+
+                for i in range(10):
+
+                    angle = (
+                        i
+                        / 10
+                        * 2
+                        * math.pi
+                    )
+
+                    radius = 65
+
+                    dx = (
+                        zx
+                        + math.cos(angle)
+                        * radius
+                    )
+
+                    dy = (
+                        zy
+                        + math.sin(angle)
+                        * radius
+                    )
+
+                    self.canvas.create_oval(
+                        dx - 5,
+                        dy - 5,
+                        dx + 5,
+                        dy + 5,
+                        fill=ZONE_COLORS[zone],
+                        outline=""
+                    )
+
+        else:
+
+            # Devices around bus-connected zones
+            for zone in ZONES:
+
+                if zone not in positions:
+                    continue
+
+                zx, zy = positions[zone]
+
+                for i in range(10):
+
+                    angle = (
+                        i
+                        / 10
+                        * 2
+                        * math.pi
+                    )
+
+                    radius = 55
+
+                    dx = (
+                        zx
+                        + math.cos(angle)
+                        * radius
+                    )
+
+                    dy = (
+                        zy
+                        + math.sin(angle)
+                        * radius
+                    )
+
+                    self.canvas.create_oval(
+                        dx - 4,
+                        dy - 4,
+                        dx + 4,
+                        dy + 4,
+                        fill=ZONE_COLORS[zone],
+                        outline=""
+                    )
+
+
+        # ----------------------------------------------------
+        # Title
+        # ----------------------------------------------------
+
+        self.canvas.create_text(
+            20,
+            20,
+            text=f"{topology_name.upper()} TOPOLOGY",
+            anchor="nw",
+            font=(
+                "Arial",
+                15,
+                "bold"
+            ),
+            fill="#2c3e50"
+        )
+
+        self.canvas.create_text(
+            20,
+            45,
+            text="40 End Devices | 4 Hospital Zones",
+            anchor="nw",
+            font=(
+                "Arial",
+                10
+            ),
+            fill="#7f8c8d"
+        )
+
+
+    # --------------------------------------------------------
+    # LOG
+    # --------------------------------------------------------
+
+    def add_log(self, text):
+
+        self.log.insert(
+            "end",
+            text + "\n"
+        )
+
+        self.log.see(
+            "end"
+        )
+
+
+    # --------------------------------------------------------
+    # RUN SIMULATION
+    # --------------------------------------------------------
+
+    def run_simulation(self):
+
+        try:
+
+            packets = int(
+                self.packet_var.get()
+            )
+
+            if packets <= 0:
+                raise ValueError
+
+            if packets > 10000:
+                raise ValueError
+
+        except:
+
+            messagebox.showerror(
+                "Invalid Input",
+                "Enter a packet count between 1 and 10000."
+            )
+
+            return
+
+
+        topology = (
+            self.topology_var.get()
+        )
+
+        protocol = (
+            self.protocol_var.get()
+        )
+
+        scenario = (
+            self.scenario_var.get()
+        )
+
+        self.status_var.set(
+            "Running simulation..."
+        )
+
+        self.progress["value"] = 0
+
+        self.log.delete(
+            "1.0",
+            "end"
+        )
+
+        self.add_log(
+            "=========================================="
+        )
+
+        self.add_log(
+            "SMART HEALTHCARE NETWORK SIMULATION"
+        )
+
+        self.add_log(
+            "=========================================="
+        )
+
+        self.add_log(
+            f"Topology : {topology}"
+        )
+
+        self.add_log(
+            f"Protocol : {protocol}"
+        )
+
+        self.add_log(
+            f"Scenario : {scenario}"
+        )
+
+        self.add_log(
+            f"Packets  : {packets}"
+        )
+
+        self.add_log(
+            ""
+        )
+
+
+        # Simulate with visible progress
+        self.root.update_idletasks()
+
+        result = self.engine.simulate(
+            topology,
+            protocol,
+            scenario,
+            packets
+        )
+
+        self.current_result = result
+
+        self.progress["value"] = 100
+
+        self.update_metrics(
+            result
+        )
+
+        self.animate_packet()
+
+        self.add_log(
+            f"Packets Sent     : {result['Sent']}"
+        )
+
+        self.add_log(
+            f"Packets Received : {result['Received']}"
+        )
+
+        self.add_log(
+            f"Packet Loss      : {result['Loss']:.2f}%"
+        )
+
+        self.add_log(
+            f"Delivery Ratio   : {result['Delivery']:.2f}%"
+        )
+
+        self.add_log(
+            f"Delay            : {result['Delay']:.2f} ms"
+        )
+
+        self.add_log(
+            f"Jitter           : {result['Jitter']:.2f} ms"
+        )
+
+        self.add_log(
+            f"Throughput       : {result['Throughput']:.2f} Mbps"
+        )
+
+        self.add_log(
+            f"Utilization      : {result['Utilization']:.2f}%"
+        )
+
+        self.add_log(
+            ""
+        )
+
+        if result["Path"]:
+
+            self.add_log(
+                "Communication Path:"
+            )
+
+            self.add_log(
+                " -> ".join(
+                    result["Path"]
+                )
+            )
+
+        else:
+
+            self.add_log(
+                "No available path due to network disruption."
+            )
+
+        self.status_var.set(
+            "Simulation completed successfully."
+        )
+
+
+    # --------------------------------------------------------
+    # UPDATE METRICS
+    # --------------------------------------------------------
+
+    def update_metrics(
+        self,
+        result
+    ):
+
+        self.metric_vars[
+            "Delivery Ratio"
+        ].set(
+            f"{result['Delivery']:.2f}%"
+        )
+
+        self.metric_vars[
+            "Packet Loss"
+        ].set(
+            f"{result['Loss']:.2f}%"
+        )
+
+        self.metric_vars[
+            "End-to-End Delay"
+        ].set(
+            f"{result['Delay']:.2f} ms"
+        )
+
+        self.metric_vars[
+            "Response Time"
+        ].set(
+            f"{result['Response']:.2f} ms"
+        )
+
+        self.metric_vars[
+            "Jitter"
+        ].set(
+            f"{result['Jitter']:.2f} ms"
+        )
+
+        self.metric_vars[
+            "Throughput"
+        ].set(
+            f"{result['Throughput']:.2f} Mbps"
+        )
+
+        self.metric_vars[
+            "Bandwidth Utilization"
+        ].set(
+            f"{result['Utilization']:.2f}%"
+        )
+
+
+    # --------------------------------------------------------
+    # PACKET ANIMATION
+    # --------------------------------------------------------
+
+    def animate_packet(self):
+
+        topology_name = (
+            self.topology_var.get()
+        )
+
+        topology = NetworkTopology(
+            topology_name
+        )
+
+        positions = self.get_positions()
+
+        if not self.current_result:
+            return
+
+        path = (
+            self.current_result["Path"]
+        )
+
+        if not path or len(path) < 2:
+            return
+
+        self.animation_points = []
+
+        for node in path:
+
+            if node in positions:
+
+                self.animation_points.append(
+                    positions[node]
+                )
+
+        if len(self.animation_points) < 2:
+            return
+
+        self.animation_index = 0
+
+        self.move_packet()
+
+
+    def get_positions(self):
+
+        width = max(
+            self.canvas.winfo_width(),
+            700
+        )
+
+        height = max(
+            self.canvas.winfo_height(),
+            500
+        )
+
+        cx = width / 2
+        cy = height / 2
+
+        topology = (
+            self.topology_var.get()
+        )
+
+        positions = {}
+
+        if topology == "Star":
+
+            positions = {
+                "CORE": (cx, cy),
+                "ICU": (cx - 230, cy - 130),
+                "Medical Records": (cx + 230, cy - 130),
+                "Laboratory": (cx - 230, cy + 130),
+                "Pharmacy / Emergency":
+                    (cx + 230, cy + 130)
+            }
+
+        elif topology == "Mesh":
+
+            positions = {
+                "ICU": (cx - 220, cy - 150),
+                "Medical Records":
+                    (cx + 220, cy - 150),
+                "Laboratory":
+                    (cx - 220, cy + 150),
+                "Pharmacy / Emergency":
+                    (cx + 220, cy + 150)
+            }
+
+        elif topology == "Hybrid":
+
+            positions = {
+                "CORE": (cx, cy),
+                "ICU": (cx - 230, cy - 130),
+                "Medical Records":
+                    (cx + 230, cy - 130),
+                "Laboratory":
+                    (cx - 230, cy + 130),
+                "Pharmacy / Emergency":
+                    (cx + 230, cy + 130)
+            }
+
+        elif topology == "Bus":
+
+            positions = {
+                "BUS1": (cx - 280, cy),
+                "BUS2": (cx - 140, cy),
+                "BUS3": (cx, cy),
+                "BUS4": (cx + 140, cy),
+                "BUS5": (cx + 280, cy),
+                "ICU": (cx - 140, cy - 150),
+                "Medical Records":
+                    (cx, cy - 150),
+                "Laboratory":
+                    (cx + 140, cy + 150),
+                "Pharmacy / Emergency":
+                    (cx + 280, cy + 150)
+            }
+
+        return positions
+
+
+    def move_packet(self):
+
+        if hasattr(
+            self,
+            "packet_item"
+        ):
+
+            self.canvas.delete(
+                self.packet_item
+            )
+
+        points = (
+            self.animation_points
+        )
+
+        if self.animation_index >= len(points) - 1:
+
+            return
+
+        x1, y1 = points[
+            self.animation_index
+        ]
+
+        x2, y2 = points[
+            self.animation_index + 1
+        ]
+
+        steps = 10
+
+        for step in range(
+            steps
+        ):
+
+            ratio = (
+                step
+                / steps
+            )
+
+            x = (
+                x1
+                + (x2 - x1)
+                * ratio
+            )
+
+            y = (
+                y1
+                + (y2 - y1)
+                * ratio
+            )
+
+            self.packet_item = (
+                self.canvas.create_oval(
+                    x - 7,
+                    y - 7,
+                    x + 7,
+                    y + 7,
+                    fill="#e67e22",
+                    outline="white",
+                    width=2,
+                    tags="packet"
+                )
+            )
+
+            self.root.update_idletasks()
+
+            time.sleep(
+                0.015
+            )
+
+            self.canvas.delete(
+                "packet"
+            )
+
+        self.animation_index += 1
+
+        self.root.after(
+            10,
+            self.move_packet
+        )
+
+
+    # --------------------------------------------------------
+    # TOPOLOGY COMPARISON
+    # --------------------------------------------------------
+
+    def compare_topologies(self):
+
+        protocol = (
+            self.protocol_var.get()
+        )
+
+        scenario = (
+            self.scenario_var.get()
+        )
+
+        try:
+
+            packets = int(
+                self.packet_var.get()
+            )
+
+        except:
+
+            packets = 100
+
+        self.status_var.set(
+            "Comparing all topologies..."
+        )
+
+        self.log.delete(
+            "1.0",
+            "end"
+        )
+
+        results = []
+
+        for topology in TOPOLOGIES:
+
+            result = self.engine.simulate(
+                topology,
+                protocol,
+                scenario,
+                packets
+            )
+
+            results.append(
+                result
+            )
+
+        self.all_results = results
+
+        self.show_comparison(
+            results,
+            protocol,
+            scenario
+        )
+
+        self.status_var.set(
+            "Topology comparison completed."
+        )
+
+
+    # --------------------------------------------------------
+    # COMPARISON WINDOW
+    # --------------------------------------------------------
+
+    def show_comparison(
+        self,
+        results,
+        protocol,
+        scenario
+    ):
+
+        window = tk.Toplevel(
+            self.root
+        )
+
+        window.title(
+            "Topology Performance Comparison"
+        )
+
+        window.geometry(
+            "1100x750"
+        )
+
+
+        ttk.Label(
+            window,
+            text=(
+                f"Topology Comparison | "
+                f"{protocol} | {scenario}"
+            ),
+            font=(
+                "Arial",
+                16,
+                "bold"
+            )
+        ).pack(
+            pady=10
+        )
+
+
+        # Table
+        columns = (
+            "Topology",
+            "Delivery",
+            "Loss",
+            "Delay",
+            "Response",
+            "Jitter",
+            "Throughput",
+            "Utilization"
+        )
+
+        tree = ttk.Treeview(
+            window,
+            columns=columns,
+            show="headings",
+            height=8
+        )
+
+        for col in columns:
+
+            tree.heading(
+                col,
+                text=col
+            )
+
+            tree.column(
+                col,
+                width=115
+            )
+
+        tree.pack(
+            fill="x",
+            padx=15
+        )
+
+
+        for result in results:
+
+            tree.insert(
+                "",
+                "end",
+                values=(
+                    result["Topology"],
+                    f"{result['Delivery']:.2f}%",
+                    f"{result['Loss']:.2f}%",
+                    f"{result['Delay']:.2f}",
+                    f"{result['Response']:.2f}",
+                    f"{result['Jitter']:.2f}",
+                    f"{result['Throughput']:.2f}",
+                    f"{result['Utilization']:.2f}"
+                )
+            )
+
+
+        # Determine best topology
+        best = self.calculate_best(
+            results
+        )
+
+
+        recommendation = ttk.Label(
+            window,
+            text=(
+                f"RECOMMENDED TOPOLOGY: "
+                f"{best['Topology']}"
+            ),
+            font=(
+                "Arial",
+                17,
+                "bold"
+            )
+        )
+
+        recommendation.pack(
+            pady=12
+        )
+
+
+        # Graph
+        figure, axes = plt.subplots(
+            2,
+            2,
+            figsize=(10, 6)
+        )
+
+        topology_names = [
+            r["Topology"]
+            for r in results
+        ]
+
+        delivery = [
+            r["Delivery"]
+            for r in results
+        ]
+
+        delay = [
+            r["Delay"]
+            for r in results
+        ]
+
+        throughput = [
+            r["Throughput"]
+            for r in results
+        ]
+
+        loss = [
+            r["Loss"]
+            for r in results
+        ]
+
+
+        axes[0, 0].bar(
+            topology_names,
+            delivery
+        )
+
+        axes[0, 0].set_title(
+            "Packet Delivery Ratio"
+        )
+
+        axes[0, 0].set_ylabel(
+            "%"
+        )
+
+
+        axes[0, 1].bar(
+            topology_names,
+            loss
+        )
+
+        axes[0, 1].set_title(
+            "Packet Loss"
+        )
+
+        axes[0, 1].set_ylabel(
+            "%"
+        )
+
+
+        axes[1, 0].bar(
+            topology_names,
+            delay
+        )
+
+        axes[1, 0].set_title(
+            "End-to-End Delay"
+        )
+
+        axes[1, 0].set_ylabel(
+            "ms"
+        )
+
+
+        axes[1, 1].bar(
+            topology_names,
+            throughput
+        )
+
+        axes[1, 1].set_title(
+            "Throughput"
+        )
+
+        axes[1, 1].set_ylabel(
+            "Mbps"
+        )
+
+
+        figure.tight_layout()
+
+
+        chart = FigureCanvasTkAgg(
+            figure,
+            master=window
+        )
+
+        chart.draw()
+
+        chart.get_tk_widget().pack(
+            fill="both",
+            expand=True,
+            padx=10,
+            pady=10
+        )
+
+
+    # --------------------------------------------------------
+    # BEST TOPOLOGY
+    # --------------------------------------------------------
+
+    def calculate_best(
+        self,
+        results
+    ):
+
+        scored = []
+
+        for result in results:
+
+            score = (
+                result["Delivery"] * 0.30
+                + result["Throughput"] * 0.20
+                + (100 - result["Loss"]) * 0.15
+                + max(
+                    0,
+                    100 - result["Delay"]
+                ) * 0.15
+                + max(
+                    0,
+                    100 - result["Jitter"]
+                ) * 0.10
+                + max(
+                    0,
+                    100 - result["Utilization"]
+                ) * 0.10
+            )
+
+            scored.append(
+                (
+                    score,
+                    result
+                )
+            )
+
+        scored.sort(
+            key=lambda x: x[0],
+            reverse=True
+        )
+
+        return scored[0][1]
+
+
+    # --------------------------------------------------------
+    # CLEAR
+    # --------------------------------------------------------
+
+    def clear_results(self):
+
+        for var in self.metric_vars.values():
+
+            var.set(
+                "-"
+            )
+
+        self.log.delete(
+            "1.0",
+            "end"
+        )
+
+        self.progress["value"] = 0
+
+        self.status_var.set(
+            "Ready"
+        )
+
+        self.current_result = None
+
+        self.draw_network()
+
+
+# ============================================================
+# PROGRAM ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+
+    root = tk.Tk()
+
+    app = HealthcareNetworkApp(
+        root
+    )
+
+    root.mainloop()
